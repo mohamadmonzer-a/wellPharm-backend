@@ -1,22 +1,14 @@
 from fastapi import FastAPI
-import os
-import psycopg2
 
 app = FastAPI()
 
 @app.get("/")
-async def root():
-    return {"message": "Pharmacy backend is running with FastAPI"}
+def home():
+    return {"message": "Backend is running"}
 
-# Example DB connection (adjust for your setup)
-@app.get("/dbtest")
-async def db_test():
-    try:
-        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
-        cur = conn.cursor()
-        cur.execute("SELECT 1;")
-        cur.close()
-        conn.close()
-        return {"db": "connected"}
-    except Exception as e:
-        return {"db": "error", "detail": str(e)}
+@app.get("/products")
+def get_products():
+    return [
+        {"id": 1, "name": "Paracetamol", "price": 3.5},
+        {"id": 2, "name": "Vitamin C", "price": 5.0},
+    ]
