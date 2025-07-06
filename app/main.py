@@ -7,6 +7,7 @@ from databases import Database
 from sqlalchemy import Table, Column, Integer, String, Float, MetaData
 from dotenv import load_dotenv
 
+
 load_dotenv()  # load .env file
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -41,11 +42,12 @@ origins = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],  # or restrict to ["https://well-pharm-frontend.vercel.app"]
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 @app.on_event("startup")
 async def startup():
