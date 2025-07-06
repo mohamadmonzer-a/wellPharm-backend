@@ -1,78 +1,55 @@
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
-from fastapi.middleware.cors import CORSMiddleware
-import psycopg2
 import os
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import List
+from databases import Database
+from sqlalchemy import Table, Column, Integer, String, Float, MetaData
 from dotenv import load_dotenv
+
+load_dotenv()  # load .env
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+database = Database(DATABASE_URL)
+metadata = MetaData()
+
+medicines = Table(
+    "medicines",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("name", String(100)),
+    Column("description", String(500)),
+    Column("price", Float),
+    Column("image", String(200), nullable=True),
+)
 
 app = FastAPI()
 
-# Enable CORS if frontend served on different origin
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Adjust in production
+    allow_origins=["https://yourfrontenddomain.com", "http://localhost:8000"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+class Medicine(BaseModel):
+    id: int
+    name: str
+    description: str
+    price: float
+    image: str = None
 
-load_dotenv()  # loads .env from current working directory
+@app.on_event("startup")
+async def startup():
+    await database.connect()
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+@app.on_event("shutdown")
+async def shutdown():
+    await database.disconnect()
 
-def get_db_connection():
-    conn = psycopg2.connect(DATABASE_URL)
-    return conn
-
-@app.get("/api/medicines")
-def read_medicines():
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT id, name, description, price, stock, manufacturer FROM medicines ORDER BY id;")
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    medicines = []
-    for r in rows:
-        medicines.append({
-            "id": r[0],
-            "name": r[1],
-            "description": r[2],
-            "price": float(r[3]),
-            "stock": r[4],
-            "manufacturer": r[5]
-        })
-    return medicines
-
-# Optional: serve a simple frontend page
-@app.get("/", response_class=HTMLResponse)
-def home():
-    return """
-    <!DOCTYPE html>
-    <html>
-    <head><title>Pharmacy Medicines</title></head>
-    <body>
-    <h1>Medicines List</h1>
-    <ul id="medicines-list"></ul>
-
-    <script>
-      async function loadMedicines() {
-        const res = await fetch('/api/medicines');
-        if (!res.ok) {
-          document.getElementById('medicines-list').textContent = 'Failed to load medicines';
-          return;
-        }
-        const medicines = await res.json();
-        const ul = document.getElementById('medicines-list');
-        ul.innerHTML = '';
-        medicines.forEach(med => {
-          const li = document.createElement('li');
-          li.textContent = `${med.name} - ${med.description} - $${med.price} - Stock: ${med.stock}`;
-          ul.appendChild(li);
-        });
-      }
-      loadMedicines();
-    </script>
-    </body>
-    </html>
-    """
+@app.get("/api/products", response_model=List[Medicine])
+async def get_products():
+    query = medicines.select()
+    rows = await database.fetch_all(query)
+    return [Medicine(**row) for row in rows]
