@@ -1,27 +1,30 @@
 import os
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
-from typing import List
+from typing import List, Optional
 from databases import Database
 from sqlalchemy import Table, Column, Integer, String, Float, MetaData
 from dotenv import load_dotenv
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
+import httpx  # for Google token verification
+import os
+import secrets
 
-# Load env vars
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
-SECRET_KEY = os.getenv("SECRET_KEY", "supersecretkey")  # Replace with env var in prod
+SECRET_KEY = os.getenv("SECRET_KEY", "supersecretkey")  # IMPORTANT: replace in prod!
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 
 database = Database(DATABASE_URL)
 metadata = MetaData()
 
-# Medicines table & schema (your existing code)
+# Medicines table (existing)
 medicines = Table(
     "medicines",
     metadata,
@@ -35,11 +38,11 @@ medicines = Table(
 class Medicine(BaseModel):
     id: int
     name: str
-    description: str | None = None
+    description: Optional[str] = None
     price: float
-    image: str | None = None
+    image: Optional[str] = None
 
-# New: Users table
+# Users table (existing)
 users = Table(
     "users",
     metadata,
@@ -49,7 +52,23 @@ users = Table(
     Column("full_name", String(100), nullable=True),
 )
 
-# Auth utils
+class UserCreate(BaseModel):
+    email: EmailStr
+    password: str
+    full_name: Optional[str] = None
+
+class UserOut(BaseModel):
+    id: int
+    email: EmailStr
+    full_name: Optional[str] = None
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+class GoogleToken(BaseModel):
+    token: str
+
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def verify_password(plain_password, hashed_password):
@@ -58,7 +77,7 @@ def verify_password(plain_password, hashed_password):
 def get_password_hash(password):
     return pwd_context.hash(password)
 
-def create_access_token(data: dict, expires_delta: timedelta | None = None):
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire})
@@ -71,22 +90,6 @@ def decode_access_token(token: str):
     except JWTError:
         return None
 
-# Pydantic schemas for users & tokens
-class UserCreate(BaseModel):
-    email: EmailStr
-    password: str
-    full_name: str | None = None
-
-class UserOut(BaseModel):
-    id: int
-    email: EmailStr
-    full_name: str | None = None
-
-class Token(BaseModel):
-    access_token: str
-    token_type: str
-
-# FastAPI app and CORS middleware (your existing plus new origins if needed)
 app = FastAPI()
 
 origins = [
@@ -102,16 +105,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Startup/shutdown DB connection (your existing)
 @app.on_event("startup")
 async def startup():
     await database.connect()
+    # Note: create tables manually or via Alembic migrations
 
 @app.on_event("shutdown")
 async def shutdown():
     await database.disconnect()
 
-# Existing route: get products
 @app.get("/api/products", response_model=List[Medicine])
 async def get_products():
     query = medicines.select()
@@ -122,7 +124,6 @@ async def get_products():
 async def root():
     return {"message": "FastAPI backend for wellPharm is running"}
 
-# New routes for user registration and login
 @app.post("/api/register", response_model=UserOut)
 async def register(user: UserCreate):
     query = users.select().where(users.c.email == user.email)
@@ -130,8 +131,10 @@ async def register(user: UserCreate):
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
     hashed_password = get_password_hash(user.password)
-    query = users.insert().values(email=user.email, hashed_password=hashed_password, full_name=user.full_name)
-    user_id = await database.execute(query)
+    insert_query = users.insert().values(
+        email=user.email, hashed_password=hashed_password, full_name=user.full_name
+    )
+    user_id = await database.execute(insert_query)
     return {"id": user_id, "email": user.email, "full_name": user.full_name}
 
 @app.post("/api/login", response_model=Token)
@@ -141,4 +144,39 @@ async def login(user: UserCreate):
     if not db_user or not verify_password(user.password, db_user["hashed_password"]):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     access_token = create_access_token(data={"sub": db_user["email"]})
+    return {"access_token": access_token, "token_type": "bearer"}
+
+@app.post("/api/auth/google", response_model=Token)
+async def google_auth(google_token: GoogleToken):
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            "https://oauth2.googleapis.com/tokeninfo",
+            params={"id_token": google_token.token},
+        )
+    if resp.status_code != 200:
+        raise HTTPException(status_code=401, detail="Invalid Google token")
+
+    token_info = resp.json()
+    if token_info.get("aud") != GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=401, detail="Invalid audience")
+
+    email = token_info.get("email")
+    full_name = token_info.get("name")
+
+    query = users.select().where(users.c.email == email)
+    user = await database.fetch_one(query)
+    if not user:
+        # Create user with a random password hash (Google login does not need password)
+        random_password = secrets.token_urlsafe(16)
+        hashed_password = get_password_hash(random_password)
+        insert_query = users.insert().values(
+            email=email,
+            hashed_password=hashed_password,
+            full_name=full_name,
+        )
+        user_id = await database.execute(insert_query)
+    else:
+        user_id = user["id"]
+
+    access_token = create_access_token(data={"sub": email})
     return {"access_token": access_token, "token_type": "bearer"}

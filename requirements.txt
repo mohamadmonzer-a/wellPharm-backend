@@ -3,3 +3,7 @@ uvicorn[standard]
 databases[postgresql]
 sqlalchemy
 python-dotenv
+passlib[bcrypt]
+python-jose[cryptography]
+authlib
+httpx
