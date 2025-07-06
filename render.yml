@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: wellpharm-backend
+    env: python
+    plan: free
+    buildCommand: ""
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port 3000
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: wellpharm-db
+          property: connectionString
+
+databases:
+  - name: wellpharm-db
+    plan: free
