@@ -1,44 +1,55 @@
 import os
+import sys
 import psycopg2
-from psycopg2 import sql
 from dotenv import load_dotenv
 
-load_dotenv()  # loads .env file
+load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-def create_table_and_insert_data():
-    conn = psycopg2.connect(DATABASE_URL)
-    cur = conn.cursor()
+# Sample medicine data
+medicines = [
+    ('Paracetamol', 'Pain reliever', 3.50, 100, 'Acme Pharma', 'https://via.placeholder.com/100?text=Paracetamol'),
+    ('Ibuprofen', 'Anti-inflammatory', 4.20, 50, 'HealthCorp', 'https://via.placeholder.com/100?text=Ibuprofen'),
+    ('Vitamin C', 'Supplement', 5.00, 75, 'NutraHealth', 'https://via.placeholder.com/100?text=Vitamin+C'),
+    ('Amoxicillin', 'Antibiotic', 10.00, 40, 'MediLab', 'https://via.placeholder.com/100?text=Amoxicillin'),
+    ('Cetirizine', 'Antihistamine', 7.00, 60, 'AllergyFree', 'https://via.placeholder.com/100?text=Cetirizine'),
+]
 
-    # Create table if not exists
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS medicines (
-        id SERIAL PRIMARY KEY,
-        name VARCHAR(255) NOT NULL,
-        description TEXT,
-        price NUMERIC(10,2),
-        stock INT,
-        manufacturer VARCHAR(255)
-    );
-    """)
+def create_connection():
+    return psycopg2.connect(DATABASE_URL)
 
-    # Insert sample data
-    cur.execute("""
-    INSERT INTO medicines (name, description, price, stock, manufacturer)
-    VALUES
-        ('Paracetamol', 'Pain reliever', 3.50, 100, 'Acme Pharma'),
-        ('Ibuprofen', 'Anti-inflammatory', 4.20, 50, 'HealthCorp'),
-        ('Vitamin C', 'Supplement', 5.00, 75, 'NutraHealth'),
-        ('Amoxicillin', 'Antibiotic', 10.00, 40, 'MediLab'),
-        ('Cetirizine', 'Antihistamine', 7.00, 60, 'AllergyFree')
-    ON CONFLICT DO NOTHING;
-    """)
+def reset_table():
+    with create_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DROP TABLE IF EXISTS medicines;")
+            cur.execute("""
+            CREATE TABLE medicines (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(255) NOT NULL UNIQUE,
+                description TEXT,
+                price NUMERIC(10,2),
+                stock INT,
+                manufacturer VARCHAR(255),
+                image TEXT
+            );
+            """)
+            conn.commit()
+            print("✅ Table dropped and recreated.")
 
-    conn.commit()
-    cur.close()
-    conn.close()
-    print("Table created and sample data inserted successfully.")
+def insert_new_data():
+    with create_connection() as conn:
+        with conn.cursor() as cur:
+            for med in medicines:
+                cur.execute("""
+                INSERT INTO medicines (name, description, price, stock, manufacturer, image)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (name) DO NOTHING;
+                """, med)
+            conn.commit()
+            print("✅ New items inserted (existing skipped).")
 
 if __name__ == "__main__":
-    create_table_and_insert_data()
+    if len(sys.argv) > 1 and sys.argv[1] == "reset":
+        reset_table()
+    insert_new_data()
